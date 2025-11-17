@@ -1,4 +1,3 @@
-# btc_4h_regression_ev_backtest.py
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -9,100 +8,82 @@ import pandas_ta as ta
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_squared_error, r2_score, roc_auc_score
 import matplotlib.pyplot as plt
-from datetime import timedelta
-from tqdm import tqdm
 
-# ----------------------------
-# CONFIG (4-hour horizon, EWMA smoothing span=3)
-# ----------------------------
 TICKER = "BTC-USD"
 PERIOD = "729d"
 INTERVAL = "1h"
 
 TRAIN_WINDOW_DAYS = 729
 TEST_DAYS = 21
-FUTURE_HORIZ_HOURS = 4      # 4-hour horizon (changed)
-VAL_DAYS = 60               # larger validation to reduce overfitting
+FUTURE_HORIZ_HOURS = 4
+VAL_DAYS = 60
 MIN_TRAIN_BARS = 800
-N_BINS = 20                 # bins for calibration mapping
-EWMA_SPAN = 3               # smoothing span (hours) — recommended
-THR_GRID = np.linspace(0.0008, 0.0045, 20)  # grid of thresholds (in return units)
-TRANSACTION_COST = 0.0005   # round-trip cost
+N_BINS = 20
+EWMA_SPAN = 3
+THR_GRID = np.linspace(0.0008, 0.0045, 20)
+TRANSACTION_COST = 0.0005
 HOURS_PER_YEAR = 365 * 24
 RANDOM_STATE = 42
 
 OUT_PRED_CSV = "btc_4h_regression_ev_predictions.csv"
 OUT_SUMMARY_CSV = "btc_4h_regression_ev_summary.csv"
 
-# ----------------------------
-# 1) DOWNLOAD & PREP
-# ----------------------------
 print(f"Downloading {TICKER} {PERIOD} {INTERVAL} ...")
 df = yf.download(TICKER, period=PERIOD, interval=INTERVAL, progress=False)
 if df.empty:
     raise RuntimeError("No data downloaded. Check network / ticker / yfinance limits.")
 
-# timezone-safe index
 df.index = pd.to_datetime(df.index)
 if df.index.tz is None:
     df.index = df.index.tz_localize("UTC")
 else:
     df.index = df.index.tz_convert("UTC")
 
-# flatten columns if MultiIndex
 if isinstance(df.columns, pd.MultiIndex):
     df.columns = [c[0] for c in df.columns]
-df = df[["Open","High","Low","Close","Volume"]].copy()
+df = df[["Open", "High", "Low", "Close", "Volume"]].copy()
 
-# ----------------------------
-# 2) FEATURES & 4H TARGET
-# ----------------------------
-print("Engineering features and 4-hour target...")
 df["ret_1h"] = df["Close"].pct_change()
-df["future_ret"] = df["Close"].shift(-FUTURE_HORIZ_HOURS) / df["Close"] - 1  # 4h ahead
+df["future_ret"] = df["Close"].shift(-FUTURE_HORIZ_HOURS) / df["Close"] - 1
 
-# Typical price & VWAP (cumulative)
 df["typ_price"] = (df["High"] + df["Low"] + df["Close"]) / 3
 df["vwap_num"] = (df["typ_price"] * df["Volume"]).cumsum()
 df["vwap_den"] = df["Volume"].cumsum()
 df["VWAP"] = df["vwap_num"] / (df["vwap_den"] + 1e-12)
 
-# Moving avgs and diffs
 df["sma_20"] = df["Close"].rolling(20).mean()
 df["ema_9"] = df["Close"].ewm(span=9, adjust=False).mean()
 df["ema_21"] = df["Close"].ewm(span=21, adjust=False).mean()
 df["ema_diff_9_21"] = df["ema_9"] - df["ema_21"]
 df["dist_close_sma20"] = (df["Close"] - df["sma_20"]) / (df["sma_20"] + 1e-12)
 
-# MACD / RSI / Stoch / ATR / BB (robust iloc usage)
 macd = ta.macd(df["Close"])
 if macd is not None and not macd.empty:
-    df["macd"] = macd.iloc[:,0]
-    if macd.shape[1] > 1: df["macd_sig"] = macd.iloc[:,1]
-    if macd.shape[1] > 2: df["macd_hist"] = macd.iloc[:,2]
+    df["macd"] = macd.iloc[:, 0]
+    if macd.shape[1] > 1: df["macd_sig"] = macd.iloc[:, 1]
+    if macd.shape[1] > 2: df["macd_hist"] = macd.iloc[:, 2]
 
 df["rsi_14"] = ta.rsi(df["Close"], length=14)
 stoch = ta.stoch(df["High"], df["Low"], df["Close"])
 if stoch is not None and not stoch.empty:
     stoch_cols = [c.lower() for c in stoch.columns]
-    k_idx = next((i for i,c in enumerate(stoch_cols) if "k" in c), 0)
-    d_idx = next((i for i,c in enumerate(stoch_cols) if "d" in c and i != k_idx), (1 if stoch.shape[1] > 1 else 0))
+    k_idx = next((i for i, c in enumerate(stoch_cols) if "k" in c), 0)
+    d_idx = next((i for i, c in enumerate(stoch_cols) if "d" in c and i != k_idx), (1 if stoch.shape[1] > 1 else 0))
     df["stoch_k"] = stoch.iloc[:, k_idx]
     if stoch.shape[1] > 1: df["stoch_d"] = stoch.iloc[:, d_idx]
 
 df["atr_14"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
 bb = ta.bbands(df["Close"], length=20, std=2)
 if bb is not None and not bb.empty:
-    df["bb_upper"] = bb.iloc[:,0]; df["bb_mid"] = bb.iloc[:,1]; df["bb_lower"] = bb.iloc[:,2]
+    df["bb_upper"] = bb.iloc[:, 0]; df["bb_mid"] = bb.iloc[:, 1]; df["bb_lower"] = bb.iloc[:, 2]
     df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / (df["bb_mid"] + 1e-12)
 
-# volume & price action
 df["obv"] = ta.obv(df["Close"], df["Volume"]) if "Volume" in df.columns else 0.0
 df["vol_20"] = df["ret_1h"].rolling(20).std()
 df["vol_z"] = (df["Volume"] - df["Volume"].rolling(50).mean()) / (df["Volume"].rolling(50).std() + 1e-12)
 df["body"] = df["Close"] - df["Open"]
-df["upper_wick"] = df["High"] - df[["Close","Open"]].max(axis=1)
-df["lower_wick"] = df[["Close","Open"]].min(axis=1) - df["Low"]
+df["upper_wick"] = df["High"] - df[["Close", "Open"]].max(axis=1)
+df["lower_wick"] = df[["Close", "Open"]].min(axis=1) - df["Low"]
 df["range_pct"] = (df["High"] - df["Low"]) / (df["Close"] + 1e-12)
 
 df["ret_2h"] = df["Close"].pct_change(2)
@@ -113,20 +94,16 @@ df["zscore_20"] = (df["Close"] - df["Close"].rolling(20).mean()) / (df["Close"].
 df = df.dropna().sort_index()
 print("Rows after features:", len(df))
 
-# feature list
 FEATURES = [
-    "VWAP","ema_diff_9_21","sma_20","dist_close_sma20",
-    "macd","macd_sig","macd_hist","rsi_14","stoch_k","stoch_d",
-    "atr_14","vol_20","bb_width","obv","vol_z",
-    "body","upper_wick","lower_wick","range_pct",
-    "ret_1h","ret_2h","ret_3h","ret_6h","zscore_20"
+    "VWAP", "ema_diff_9_21", "sma_20", "dist_close_sma20",
+    "macd", "macd_sig", "macd_hist", "rsi_14", "stoch_k", "stoch_d",
+    "atr_14", "vol_20", "bb_width", "obv", "vol_z",
+    "body", "upper_wick", "lower_wick", "range_pct",
+    "ret_1h", "ret_2h", "ret_3h", "ret_6h", "zscore_20"
 ]
 FEATURES = [f for f in FEATURES if f in df.columns]
 print("Using features:", len(FEATURES))
 
-# ----------------------------
-# 3) ROLLING DAILY RETRAIN (4H regressor) + calibration + EWMA smoothing + threshold tuning
-# ----------------------------
 unique_dates = sorted({t.date() for t in df.index})
 test_days = unique_dates[-TEST_DAYS:]
 print("Test days:", test_days)
@@ -148,7 +125,6 @@ reg_params = dict(
 for day in test_days:
     day_start = pd.Timestamp(day).tz_localize("UTC")
     train_start = day_start - pd.Timedelta(days=TRAIN_WINDOW_DAYS)
-
     train_mask = (df.index >= train_start) & (df.index.date < day)
     test_mask = df.index.date == day
 
@@ -162,7 +138,6 @@ for day in test_days:
         print(f"Skipping {day}: train_bars={len(X_train_all)}, test_bars={len(X_test)}")
         continue
 
-    # validation split: last VAL_DAYS of train window (time-based)
     train_dates = sorted({t.date() for t in df.loc[train_mask].index})
     if len(train_dates) > VAL_DAYS:
         val_cut_date = train_dates[-VAL_DAYS]
@@ -170,7 +145,6 @@ for day in test_days:
         val_mask = (df.index >= val_cut_ts) & (df.index.date < day)
         train_mask2 = (df.index >= train_start) & (df.index < val_cut_ts)
     else:
-        # fallback: last N rows approach
         N = min(1000, max(300, int(len(X_train_all) * 0.2)))
         idx_all = df.loc[train_mask].index
         train_mask2 = df.index.isin(idx_all[:-N]) if len(idx_all) > N else df.index.isin([])
@@ -181,14 +155,12 @@ for day in test_days:
     X_val = df.loc[val_mask, FEATURES]
     y_val = df.loc[val_mask, "future_ret"]
 
-    # train regressor
     model = XGBRegressor(**reg_params)
     model.fit(X_train, y_train)
 
-    # predict on validation -> create calibration mapping (pred -> empirical mean future_ret) via bins
     pred_val = model.predict(X_val)
     if len(pred_val) >= N_BINS:
-        edges = np.percentile(pred_val, np.linspace(0,100,N_BINS+1))
+        edges = np.percentile(pred_val, np.linspace(0, 100, N_BINS + 1))
         edges = np.unique(edges)
         if len(edges) <= 2:
             bin_centers = np.array([pred_val.mean()])
@@ -197,7 +169,7 @@ for day in test_days:
             bin_idx = np.digitize(pred_val, edges) - 1
             centers = []
             eff_list = []
-            for i in range(len(edges)-1):
+            for i in range(len(edges) - 1):
                 mask_i = (bin_idx == i)
                 if mask_i.sum() > 0:
                     centers.append(pred_val[mask_i].mean())
@@ -208,23 +180,19 @@ for day in test_days:
         bin_centers = None
         eff = None
 
-    # function map pred->cal
     def map_cal(preds):
         if bin_centers is None or len(bin_centers) < 2:
-            # fallback linear mapping learned from val
             if len(pred_val) >= 10:
-                slope = np.cov(pred_val, y_val)[0,1] / (np.var(pred_val) + 1e-12)
+                slope = np.cov(pred_val, y_val)[0, 1] / (np.var(pred_val) + 1e-12)
                 intercept = y_val.mean() - slope * pred_val.mean()
                 return preds * slope + intercept
             else:
                 return preds
         return np.interp(preds, bin_centers, eff)
 
-    # calibration & smoothing on validation (to find threshold)
     pred_val_cal = map_cal(pred_val)
     smooth_val = pd.Series(pred_val_cal).ewm(span=EWMA_SPAN, adjust=False).mean().values
 
-    # threshold tuning on validation: search THR_GRID to maximize Sharpe (pick symmetric threshold)
     best_sh = -np.inf
     best_thr = None
     for thr in THR_GRID:
@@ -240,9 +208,8 @@ for day in test_days:
             best_sh = sh
             best_thr = thr
     if best_thr is None:
-        best_thr = THR_GRID[len(THR_GRID)//2]
+        best_thr = THR_GRID[len(THR_GRID) // 2]
 
-    # predict on test day, calibrate, smooth, signal
     pred_test = model.predict(X_test)
     pred_test_cal = map_cal(pred_test)
     smooth_test = pd.Series(pred_test_cal).ewm(span=EWMA_SPAN, adjust=False).mean().values
@@ -251,7 +218,6 @@ for day in test_days:
     sig_test[smooth_test > best_thr] = 1
     sig_test[smooth_test < -best_thr] = -1
 
-    # record per-bar rows
     for ts, raw_p, cal_p, smooth_p, s, fut in zip(X_test.index, pred_test, pred_test_cal, smooth_test, sig_test, y_test_true):
         pred_rows.append({
             "timestamp": ts,
@@ -273,9 +239,6 @@ for day in test_days:
         "val_sharpe": float(best_sh)
     })
 
-# ----------------------------
-# 4) ASSEMBLE + BACKTEST
-# ----------------------------
 pred_df = pd.DataFrame(pred_rows).set_index("timestamp").sort_index()
 if pred_df.empty:
     raise RuntimeError("No predictions generated — adjust TEST_DAYS or MIN_TRAIN_BARS.")
@@ -296,33 +259,24 @@ signal_counts = pred_df["signal"].value_counts().to_dict()
 acc = (np.sign(pred_df["future_ret"]) == pred_df["signal"]).mean()
 
 y_true = pred_df["future_ret"].values
-y_pred = pred_df["pred_smooth"].values  # or 'pred_cal'/'pred_raw'
+y_pred = pred_df["pred_smooth"].values
 
 rmse = np.sqrt(mean_squared_error(y_true, y_pred))
 mae = np.mean(np.abs(y_true - y_pred))
 r2 = r2_score(y_true, y_pred)
-pearson_corr = np.corrcoef(y_true, y_pred)[0,1]
+pearson_corr = np.corrcoef(y_true, y_pred)[0, 1]
 
-# ----------------------------
-# 4c) DIRECTIONAL METRICS
-# ----------------------------
 true_up = (y_true > 0).astype(int)
-true_down = (y_true < 0).astype(int)
-
-pred_score = y_pred  # regression predictions used as score
+pred_score = y_pred
 try:
     auc_up = roc_auc_score(true_up, pred_score)
 except ValueError:
     auc_up = np.nan
 
-# Hit rate / accuracy
 pred_sign = np.sign(y_pred)
 hit_rate = (pred_sign == np.sign(y_true)).mean()
-accuracy_up = (pred_sign[true_up==1] == 1).mean() if true_up.sum() > 0 else np.nan
+accuracy_up = (pred_sign[true_up == 1] == 1).mean() if true_up.sum() > 0 else np.nan
 
-# ----------------------------
-# 4d) TRADING METRICS
-# ----------------------------
 equity = pred_df["equity"].values
 total_return = equity[-1] - 1
 returns = pred_df["strategy_ret"].values
@@ -330,12 +284,9 @@ mean_r = returns.mean()
 std_r = returns.std()
 sharpe = (mean_r / std_r) * np.sqrt(HOURS_PER_YEAR) if std_r != 0 else np.nan
 max_dd = np.max(np.maximum.accumulate(equity) - equity)
-profit_factor = returns[returns>0].sum() / (-returns[returns<0].sum() + 1e-12)
+profit_factor = returns[returns > 0].sum() / (-returns[returns < 0].sum() + 1e-12)
 trade_count = pred_df["trade"].sum()
 
-# ----------------------------
-# 4e) PRINT SUMMARY
-# ----------------------------
 print("\n=== 4H REGRESSION EV FULL METRIC SUMMARY ===")
 print(f"Predicted bars: {len(pred_df)}")
 print(f"Total return: {total_return*100:.2f}%")
@@ -346,8 +297,8 @@ print(f"Trade count: {trade_count}")
 print(f"Hit rate (directional): {hit_rate:.4f}, Accuracy on up moves: {accuracy_up:.4f}")
 print(f"AUC (up vs down): {auc_up:.4f}")
 
-plt.figure(figsize=(14,6))
-plt.plot(pred_df.index, pred_df["equity"], label="Equity (4H Regression-EV)", color='blue')
+plt.figure(figsize=(14, 6))
+plt.plot(pred_df.index, pred_df["equity"], label="Equity (4H Regression-EV)", color="blue")
 plt.title("BTC 4H Regression EV Strategy Equity Curve")
 plt.xlabel("Time")
 plt.ylabel("Equity (starting at 1)")
@@ -355,3 +306,16 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
+
+'''
+FINAL RESULTS 
+
+Predicted bars: 483
+Total return: 9.61%
+Annualized Sharpe (24/7): 4.55
+Max Drawdown: 0.08
+Profit Factor: 1.29
+Trade count: 47
+Hit rate (directional): 0.5093, Accuracy on up moves: 0.2558
+AUC (up vs down): 0.4751
+'''
