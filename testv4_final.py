@@ -235,3 +235,13 @@ plt.ylabel("Equity (start=1)")
 plt.grid(True)
 plt.legend()
 plt.show()
+
+'''
+FINAL RESULTS
+
+Total return: 5.43%
+Sharpe: 9.00
+Accuracy (up moves): 0.5720
+AUC (up moves): 0.5117
+Signal counts: {0: 467, 1: 13, -1: 6}
+'''
