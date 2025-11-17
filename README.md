@@ -1,12 +1,17 @@
 note - v4 is the submitted model, v5-v7 are GBM based
 
+
+
 ML Prediction of BTC Price Movements and Their Connection to Brownian Motion
 
 By Arjun and Pranav (11K)
 
 
 
+
+
 Abstract
+
 This project aims to investigate whether short-term Bitcoin price movements can be predicted using a machine learning classifier combined with probability calibration and an expected value (EV) filter. An XGBoost multiclass classifier is used to predict short, long and flat outcomes one hour prior using two years of 1-hour historical data, pulled from Yahoo Finance. 
 
 To relate this to physics, we show that Bitcoin prices behave similar to a stochastic Brownian particle, where price evolution comes from random noise combined with a small structural drift. The ML model aims to learn deviations from pure randomness, similar to detecting microscopic drift inside Brownian Motion.
@@ -15,7 +20,10 @@ By yielding positive results from a backtest of the previous 21 days, we have be
 
 
 
+
+
 Introduction
+
 Financial markets behave unpredictably, especially at short timescales. Bitcoin, as a highly liquid and decentralized digital asset, displays rapid fluctuations often modeled as stochastic processes, similar to random thermal motion observed in physics.
 
 We aim to answer whether an ML model can detect small predictive signals inside what otherwise seems to be Brownian Motion.
@@ -32,7 +40,10 @@ This allows us to apply Brownian Motion theory to Quant Trading.
 
 
 
+
+
 Data & Classification
+
 We pull 729 days of BTC OHLCV data using Yahoo Finance’s Python module.
 
 We define short-term future return as - 
@@ -44,7 +55,10 @@ These are internally mapped for the XGBoost model.
 
 
 
+
+
 Features
+
 We’re using more than 25 features to train our XGBoost Classifier model. These features represent trend, momentum, volatility, price actions, and volume dynamics.
 
 The features include - 
@@ -59,7 +73,10 @@ These features are commonly used in quant finance and can help detect structural
 
 
 
+
+
 Model
+
 The parameters we use for our XGBoost Classifier model include - 
 n_estimators = 300
 max_depth = 5
@@ -80,7 +97,10 @@ This simulates a real trading system that updates each day with new information.
 
 
 
+
+
 Expected Value Modelling 
+
 
 While the XGBoost Classifier model provides a calibrated probability for each class, it does not determine whether such a trade is financially feasible or not. EV modelling incorporates both the likelihood and magnitude of the associated outcome, which helps us take a more risk-aware trade.
 
@@ -93,7 +113,10 @@ EV helps avoid reacting erratically to minimal price movements
 
 
 
+
+
 Results
+
 The results of the calibrated, EV-filtered XGBoost Classifier model was evaluated over a 21-day test period after being trained on 729 days of hourly financial data. The results are summarised below - 
 Predicted Bars -  484
 Total Return -  5.43%
@@ -107,7 +130,10 @@ The directional accuracy of 57.23% and AUC of 0.5116 indicate that the classifie
 
 
 
+
+
 Brownian Motion and Market Prices
+
 Brownian motion describes the random movement of particles suspended in a fluid.
 Mathematically - 
 dx = μdt + σdWt
@@ -119,7 +145,10 @@ Financial price dynamics are modelled using a similar technique. The XGBoost Cla
 
 
 
+
+
 Conclusion
+
 This project demonstrates that - 
 BTC prices exhibit stochastic Brownian behaviour
 ML models can detect small drift patterns using calibration and EV filtering
