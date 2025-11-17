@@ -242,3 +242,14 @@ plt.legend()
 plt.show()
 
 backtest.to_csv("btc_daily_retrain_ternary_tuned_backtest.csv")
+
+'''
+FINAL RESULTS
+
+Predicted bars: 105
+Total return: 0.00%
+Sharpe: nan
+Accuracy (up moves): 0.4000
+AUC (up moves): 0.4074
+Signal counts: {0: 105}
+'''
